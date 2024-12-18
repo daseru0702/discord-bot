@@ -21,7 +21,7 @@ intents.message_content = True
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
-COOKIE_PATH = "cookies.txt"
+COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
 def download_audio(url):
     ydl_opts = {
@@ -32,13 +32,19 @@ def download_audio(url):
             'preferredquality': '192',
         }],
         'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'cookies': COOKIE_PATH,  # 쿠키 파일 사용
+        'cookies': COOKIE_PATH,  # 쿠키 파일 경로
+        'quiet': False,  # 디버그 로그 확인용
+        'noplaylist': True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
-        
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info)
+    except Exception as e:
+        print(f"Error downloading audio: {e}")
+        return None
+
 app=Flask(__name__)
 
 @app.route("/")
