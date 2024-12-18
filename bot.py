@@ -22,6 +22,8 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
+if not os.path.exists(COOKIE_PATH):
+    print(f"Error: cookies.txt not found at {COOKIE_PATH}")
 
 def download_audio(url):
     ydl_opts = {
@@ -179,11 +181,6 @@ async def play_next_in_queue(guild):
         if repeat_flags.get(guild.id, False):  # 반복 재생
             asyncio.run_coroutine_threadsafe(queue.put((video_url, video_title)), bot.loop)
         asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
-
-    # guild.voice_client.play(player, after=after_playing)
-    # channel = discord.utils.get(guild.channels, id=guild.voice_client.channel.id)
-    # if channel:
-    #     await channel.send(f"재생 중: **{video_title}**")
 
     text_channel = discord.utils.get(guild.text_channels, name="일반")
     if not text_channel:
