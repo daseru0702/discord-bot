@@ -12,6 +12,7 @@ from flask import Flask
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
 youtube_dl.utils.bug_reports_message = lambda: ''
 
 intents = discord.Intents.default()
@@ -52,11 +53,11 @@ def download_audio(url):
         return None
 
 
-app=Flask(__name__)
+# app=Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Discord bot is running"
+# @app.route("/")
+# def home():
+#     return "Discord bot is running"
  
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -246,12 +247,12 @@ async def on_voice_state_update(member, before, after):
         if len(non_bot_members) == 0:
             await voice_client.disconnect()
 
-if __name__ == "__main__":
-    from threading import Thread
-    def run_flask():
-        app.run(host="0.0.0.0", port=8080)
+# if __name__ == "__main__":
+#     from threading import Thread
+#     def run_flask():
+#         app.run(host="0.0.0.0", port=8080)
 
-    flask_thread = Thread(target=run_flask)
-    flask_thread.start()
+#     flask_thread = Thread(target=run_flask)
+#     flask_thread.start()
 
 bot.run(TOKEN)
