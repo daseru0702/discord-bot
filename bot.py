@@ -126,34 +126,39 @@ async def on_ready():
 async def play(interaction: discord.Interaction, search_query: str):
     await interaction.response.defer()
 
-    # 1. 검색
-    results = YoutubeSearch(search_query, max_results=1).to_dict()
-    if not results:
-        await interaction.followup.send("검색결과 없음", ephemeral=True)
-        return
+    try:
+        # 검색
+        results = YoutubeSearch(search_query, max_results=1).to_dict()
+        if not results:
+            await interaction.followup.send("검색결과 없음", ephemeral=True)
+            return
 
-    video_url = f"https://www.youtube.com{results[0]['url_suffix']}"
-    video_title = results[0]['title']
+        video_url = f"https://www.youtube.com{results[0]['url_suffix']}"
+        video_title = results[0]['title']
 
-    # 2. 음성채널 연결
-    if not interaction.user.voice:
-        await interaction.followup.send("음성채널 찾을 수 없음", ephemeral=True)
-        return
+        # 음성 채널 연결
+        if not interaction.user.voice:
+            await interaction.followup.send("음성채널 찾을 수 없음", ephemeral=True)
+            return
 
-    voice_channel = interaction.user.voice.channel
-    if interaction.guild.voice_client is None:
-        await voice_channel.connect()
-    elif interaction.guild.voice_client.channel != voice_channel:
-        await interaction.guild.voice_client.move_to(voice_channel)
+        voice_channel = interaction.user.voice.channel
+        if interaction.guild.voice_client is None:
+            await voice_channel.connect()
+        elif interaction.guild.voice_client.channel != voice_channel:
+            await interaction.guild.voice_client.move_to(voice_channel)
 
-    # 3. 대기열 추가
-    queue = get_guild_queue(interaction.guild.id)
-    await queue.put((video_url, video_title))
-    await interaction.followup.send(f"대기열에 추가됨: **{video_title}**", ephemeral=True)
+        # 대기열 추가
+        queue = get_guild_queue(interaction.guild.id)
+        await queue.put((video_url, video_title))
+        await interaction.followup.send(f"대기열에 추가됨: **{video_title}**", ephemeral=True)
 
-    # 4. 재생 상태 확인 및 재생 시작
-    if not interaction.guild.voice_client.is_playing():
-        await play_next_in_queue(interaction.guild)
+        # 재생 상태 확인 및 재생 시작
+        if not interaction.guild.voice_client.is_playing():
+            await play_next_in_queue(interaction.guild)
+
+    except Exception as e:
+        print(f"Error in play command: {e}")
+        await interaction.followup.send("오류 발생: 재생 실패", ephemeral=True)
 
 async def play_next_in_queue(guild):
     queue = get_guild_queue(guild.id)
