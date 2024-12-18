@@ -32,18 +32,22 @@ def download_audio(url):
             'preferredquality': '192',
         }],
         'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'cookies': COOKIE_PATH,  # 쿠키 파일 경로
-        'quiet': False,  # 디버그 로그 확인용
+        'cookies': COOKIE_PATH,  # 쿠키 파일 경로 추가
+        'quiet': False,  # 디버깅을 위한 로그 활성화
         'noplaylist': True,
+        'nocheckcertificate': True,
+        'default_search': 'auto',  # 기본 검색
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # 동영상 정보 추출 및 다운로드
             info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info)
+            return ydl.prepare_filename(info)  # 파일 경로 반환
     except Exception as e:
         print(f"Error downloading audio: {e}")
         return None
+
 
 app=Flask(__name__)
 
@@ -63,6 +67,7 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'cookies': COOKIE_PATH,  # 쿠키 파일 경로 추가
 }
  
 ffmpeg_options = {
@@ -78,15 +83,20 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.data = data
         self.title = data.get('title')
         self.url = data.get('url')
- 
+
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
- 
+
+        try:
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        except Exception as e:
+            print(f"Error extracting info: {e}")
+            raise
+
         if 'entries' in data:
             data = data['entries'][0]
- 
+
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
  
