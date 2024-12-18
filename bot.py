@@ -35,7 +35,8 @@ def download_audio(url):
         }],
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'cookies': COOKIE_PATH,  # 쿠키 파일 경로 추가
-        'quiet': False,  # 디버깅을 위한 로그 활성화
+        'quiet': False,
+        'verbose': True,  # 디버그 로그 활성화
         'noplaylist': True,
         'nocheckcertificate': True,
         'default_search': 'auto',  # 기본 검색
