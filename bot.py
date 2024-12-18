@@ -2,12 +2,13 @@ import asyncio
 import discord
 import yt_dlp as youtube_dl
 import os
+import datetime
 
 from dotenv import load_dotenv
 from discord import app_commands
 from youtube_search import YoutubeSearch
 from discord.ext import commands
-from flask import Flask
+# from flask import Flask
 
 
 load_dotenv()
@@ -87,6 +88,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.data = data
         self.title = data.get('title')
         self.url = data.get('url')
+        self.duration = data.get('duration')
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
@@ -128,7 +130,7 @@ async def on_ready():
 # /play 명령어
 @tree.command(name="play", description="검색어로 노래 재생")
 async def play(interaction: discord.Interaction, search_query: str):
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     try:
         # 검색
@@ -164,6 +166,9 @@ async def play(interaction: discord.Interaction, search_query: str):
         print(f"Error in play command: {e}")
         await interaction.followup.send("오류 발생: 재생 실패", ephemeral=True)
 
+# 재생 처리
+current_embed_messages = {}
+
 async def play_next_in_queue(guild):
     queue = get_guild_queue(guild.id)
     if queue.empty():
@@ -177,21 +182,37 @@ async def play_next_in_queue(guild):
         await play_next_in_queue(guild)
         return
 
+    # 다음 곡 불러오기
     def after_playing(error):
         if error:
             print(f"Playback error: {error}")
-        if repeat_flags.get(guild.id, False):  # 반복 재생
+        if repeat_flags.get(guild.id, False):  # 반복 재생 여부 검사
             asyncio.run_coroutine_threadsafe(queue.put((video_url, video_title)), bot.loop)
         asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
 
+    # 채팅 채널 검색
     text_channel = discord.utils.get(guild.text_channels, name="일반")
     if not text_channel:
         text_channel = guild.text_channels[0]
 
+    # 이번 임베드가 남아있다면 삭제
+    if guild.id in current_embed_messages:
+        try:
+            await current_embed_messages[guild.id].delete()
+        except discord.NotFound: # 없는 경우 무시
+            pass
+
     guild.voice_client.play(player, after=after_playing)
 
+    # 임베드
+    embed = discord.Embed(title="현재 재생 중", description=f"[{video_title}]{video_url}", color=discord.Color.red())
+    duration = str(datetime.timedelta(seconds=player.data.get('duration', 0)))
+    embed.add_field(name="길이", value=duration, inline=True)
+    embed.add_field(name="client", value=guild.voice_client.channel.name, inline=True)
+
     if text_channel:
-        await text_channel.send(f"재생 중: **{video_title}**")
+        message = await text_channel.send(embed=embed)
+        current_embed_messages[guild.id] = message
 
 # /stop 명령어
 @tree.command(name="stop", description="재생 중인 노래 정지")
@@ -209,7 +230,7 @@ async def queue(interaction: discord.Interaction):
     if queue.empty():
         await interaction.response.send_message("대기열이 비어있음", ephemeral=True)
     else:
-        items = list(queue._queue)  # asyncio.Queue의 대기열 항목 가져오기
+        items = list(queue._queue)
         message = "\n".join([f"{i+1}. {title}" for i, (_, title) in enumerate(items)])
         await interaction.response.send_message(f"**현재 대기열:**\n{message}")
 
@@ -231,19 +252,16 @@ async def repeat(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("반복 재생 비활성화", ephemeral=True)
 
+# 음성 채널에 봇만 남은 경우 연결 끊기
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # 봇이 속한 음성 채널 가져오기
     voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
 
-    # 봇이 음성 채널에 있고, 현재 음성 채널을 확인할 수 있는 경우
     if voice_client and voice_client.is_connected():
-        channel = voice_client.channel  # 봇이 있는 음성 채널
+        channel = voice_client.channel
 
-        # 음성 채널에 있는 멤버 목록 중 봇을 제외한 사용자 확인
         non_bot_members = [m for m in channel.members if not m.bot]
 
-        # 음성 채널에 봇만 남아 있을 경우
         if len(non_bot_members) == 0:
             await voice_client.disconnect()
 
