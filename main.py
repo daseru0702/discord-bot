@@ -167,10 +167,10 @@ async def play(interaction: discord.Interaction, search_query: str):
         print(f"Error in play command: {e}")
         await interaction.followup.send("오류 발생: 재생 실패", ephemeral=True)
 
-# # play alias
-# @tree.command(name="p", description="검색어로 노래 재생")
-# async def p(interaction: discord.Interaction, search_query: str):
-#     await play(interaction, search_query)  # /play 명령어 호출
+# play alias
+@tree.command(name="p", description="검색어로 노래 재생")
+async def p(interaction: discord.Interaction, search_query: str):
+    await play(interaction, search_query)  # /play 명령어 호출
 
 # 재생 처리
 current_embed_messages = {}
