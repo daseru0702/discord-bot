@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from discord import app_commands
 from youtube_search import YoutubeSearch
 from discord.ext import commands
+from discord.ui import View, Button
 # from flask import Flask
 
 
@@ -166,12 +167,55 @@ async def play(interaction: discord.Interaction, search_query: str):
         print(f"Error in play command: {e}")
         await interaction.followup.send("오류 발생: 재생 실패", ephemeral=True)
 
+# # play alias
+# @tree.command(name="p", description="검색어로 노래 재생")
+# async def p(interaction: discord.Interaction, search_query: str):
+#     await play(interaction, search_query)  # /play 명령어 호출
+
 # 재생 처리
 current_embed_messages = {}
+
+class MusicControlView(View):
+    def __init__(self, interaction):
+        super().__init__(timeout=None)  # 버튼이 사라지지 않도록 timeout을 None으로 설정
+        self.interaction = interaction
+
+    @discord.ui.button(label="Queue", style=discord.ButtonStyle.primary)
+    async def queue_button(self, interaction: discord.Interaction, button: Button):
+        queue = get_guild_queue(self.interaction.guild.id)
+        if queue.empty():
+            await interaction.response.send_message("대기열이 비어있음", ephemeral=True)
+        else:
+            items = list(queue._queue)
+            message = "\n".join([f"{i+1}. {title}" for i, (_, title) in enumerate(items)])
+            await interaction.response.send_message(f"**현재 대기열:**\n{message}", ephemeral=True)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary)
+    async def skip_button(self, interaction: discord.Interaction, button: Button):
+        if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
+            interaction.guild.voice_client.stop()
+            await interaction.response.send_message("현재 노래를 건너뜀", ephemeral=True)
+        else:
+            await interaction.response.send_message("재생 중인 노래가 없음", ephemeral=True)
+
+    @discord.ui.button(label="Stop", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction: discord.Interaction, button: Button):
+        if interaction.guild.voice_client:
+            await interaction.guild.voice_client.disconnect()
+            await interaction.response.send_message("음성 채널에서 나감", ephemeral=True)
+        else:
+            await interaction.response.send_message("음성 채널에 연결되어 있지 않음", ephemeral=True)
 
 async def play_next_in_queue(guild):
     queue = get_guild_queue(guild.id)
     if queue.empty():
+        # 재생이 끝났으므로 임베드 삭제
+        if guild.id in current_embed_messages:
+            try:
+                await current_embed_messages[guild.id].delete()
+                del current_embed_messages[guild.id]  # 메시지 기록 삭제
+            except discord.NotFound:
+                pass
         return
 
     video_url, video_title = await queue.get()
@@ -186,6 +230,12 @@ async def play_next_in_queue(guild):
     def after_playing(error):
         if error:
             print(f"Playback error: {error}")
+        # 재생이 끝났으므로 임베드 삭제
+        if guild.id in current_embed_messages:
+            coro = current_embed_messages[guild.id].delete()
+            asyncio.run_coroutine_threadsafe(coro, bot.loop)
+            del current_embed_messages[guild.id]
+
         if repeat_flags.get(guild.id, False):  # 반복 재생 여부 검사
             asyncio.run_coroutine_threadsafe(queue.put((video_url, video_title)), bot.loop)
         asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
@@ -195,24 +245,21 @@ async def play_next_in_queue(guild):
     if not text_channel:
         text_channel = guild.text_channels[0]
 
-    # 이번 임베드가 남아있다면 삭제
-    if guild.id in current_embed_messages:
-        try:
-            await current_embed_messages[guild.id].delete()
-        except discord.NotFound: # 없는 경우 무시
-            pass
-
+    # 다음 곡 재생
     guild.voice_client.play(player, after=after_playing)
 
     # 임베드
-    embed = discord.Embed(title="현재 재생 중", description=f"[{video_title}]{video_url}", color=discord.Color.red())
+    embed = discord.Embed(title="현재 재생 중", description=f"[{video_title}]\n{video_url}", color=discord.Color.red())
     duration = str(datetime.timedelta(seconds=player.data.get('duration', 0)))
     embed.add_field(name="길이", value=duration, inline=True)
     embed.add_field(name="client", value=guild.voice_client.channel.name, inline=True)
 
-    if text_channel:
-        message = await text_channel.send(embed=embed)
-        current_embed_messages[guild.id] = message
+    # View를 사용하여 버튼 추가
+    view = MusicControlView(interaction=text_channel)  # View 생성
+    message = await text_channel.send(embed=embed, view=view)  # View 포함 메시지 전송
+
+    # 현재 임베드 저장
+    current_embed_messages[guild.id] = message
 
 # /stop 명령어
 @tree.command(name="stop", description="재생 중인 노래 정지")
@@ -232,7 +279,7 @@ async def queue(interaction: discord.Interaction):
     else:
         items = list(queue._queue)
         message = "\n".join([f"{i+1}. {title}" for i, (_, title) in enumerate(items)])
-        await interaction.response.send_message(f"**현재 대기열:**\n{message}")
+        await interaction.response.send_message(f"**현재 대기열:**\n{message}", ephemeral=True)
 
 # /skip 명령어
 @tree.command(name="skip", description="현재 재생 중인 노래 건너뛰기")
@@ -244,7 +291,7 @@ async def skip(interaction: discord.Interaction):
         await interaction.response.send_message("재생 중인 노래가 없음", ephemeral=True)
 
 # /repeat 명령어
-@tree.command(name="repeat", description="repeat on(default)/off")
+@tree.command(name="repeat", description="현재 재생 중인 노래를 반복")
 async def repeat(interaction: discord.Interaction):
     status = toggle_repeat(interaction.guild.id)
     if status:
