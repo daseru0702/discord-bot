@@ -1,3 +1,5 @@
+import sys
+import io
 import asyncio
 import discord
 import yt_dlp as youtube_dl
@@ -13,6 +15,7 @@ from discord.ui import View, Button
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 youtube_dl.utils.bug_reports_message = lambda: ''
 
@@ -53,6 +56,26 @@ def download_audio(url):
         print(f"Error downloading audio: {e}")
         return None
         
+def get_recommended_songs(video_url):
+    try:
+        with youtube_dl.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            # 확인용 출력
+            print("Extracted Info (Partial):", str(info)[:500])
+
+            # 'related'가 유효한지 확인
+            related_videos = info.get('entries')  # yt_dlp의 최신 동작 확인
+            if not related_videos:
+                print("No related videos found.")
+                return []
+            return [(video['title'].encode('utf-8', 'ignore').decode('utf-8'), f"https://www.youtube.com/watch?v={video['id']}") for video in related_videos]
+    except UnicodeEncodeError as e:
+        print(f"Unicode encoding error: {e}")
+        return []
+    except Exception as e:
+        print(f"Error getting recommendations: {e}")
+        return []
+
  
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -99,27 +122,48 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
- 
+            
 queues={}
 repeat_flags={}
+recommendation_settings = {}
 
 def get_guild_queue(guild_id):
     if guild_id not in queues:
         queues[guild_id] = asyncio.Queue()
     return queues[guild_id]
 
+# 대기열에 저장되는 데이터 구조: (url, title, added_by, is_recommended)
+# - added_by: 곡을 추가한 사용자
+# - is_recommended: 추천 곡 여부 (True/False)
+
 def toggle_repeat(guild_id):
     repeat_flags[guild_id] = not repeat_flags.get(guild_id, False)
     return repeat_flags[guild_id]
 
+def set_recommendation_status(guild_id):
+    # 추천 기능 상태 토글
+    recommendation_settings[guild_id] = not recommendation_settings.get(guild_id, True)
+    return recommendation_settings[guild_id]
 
+def is_recommendation_enabled(guild_id):
+    # 추천 기능 활성화 여부 확인
+    return recommendation_settings.get(guild_id, True)
 
 @bot.event
 async def on_ready():
     await tree.sync()
     print(f"Logged in as {bot.user}")
 
+current_song_urls = {}
 
+def set_current_song_url(guild_id, url):
+    current_song_urls[guild_id] = url
+    print(f"Set current song URL for guild {guild_id}: {url}") #디버깅용
+
+def get_current_song_url(guild_id):
+    url = current_song_urls.get(guild_id)
+    print(f"Get current song URL for guild {guild_id}: {url}") #디버깅용
+    return url
 
 # /play 명령어
 @tree.command(name="play", description="검색어로 노래 재생")
@@ -136,6 +180,8 @@ async def play(interaction: discord.Interaction, search_query: str):
         video_url = f"https://www.youtube.com{results[0]['url_suffix']}"
         video_title = results[0]['title']
 
+        set_current_song_url(interaction.guild.id, video_url) # 현재 곡 URL 저장
+
         # 음성 채널 연결
         if not interaction.user.voice:
             await interaction.followup.send("음성채널 찾을 수 없음", ephemeral=True)
@@ -149,7 +195,7 @@ async def play(interaction: discord.Interaction, search_query: str):
 
         # 대기열 추가
         queue = get_guild_queue(interaction.guild.id)
-        await queue.put((video_url, video_title))
+        await queue.put((video_url, video_title, interaction.user.display_name, False))
         await interaction.followup.send(f"대기열에 추가됨: **{video_title}**", ephemeral=True)
 
         # 재생 상태 확인 및 재생 시작
@@ -202,6 +248,19 @@ class MusicControlView(View):
 async def play_next_in_queue(guild):
     queue = get_guild_queue(guild.id)
     if queue.empty():
+        if is_recommendation_enabled(guild.id):  # 추천곡 추가 활성화 여부
+            current_song_url = get_current_song_url(guild.id)
+            print(f"Current song URL: {current_song_url}")  # 디버깅용
+
+            if current_song_url:
+                recommended_songs = get_recommended_songs(current_song_url)
+                print(f"Recommended Songs: {recommended_songs}")  # 디버깅용
+        
+                if recommended_songs:
+                    for title, url in recommended_songs[:5]:  # 최대 5개의 추천 곡 추가
+                        await queue.put((url, title, None, True))
+                    text_channel = discord.utils.get(guild.text_channels, name="일반") or guild.text_channels[0]
+                    await text_channel.send(f"대기열이 비어있어 자동으로 추가됨: {', '.join([title for title, _ in recommended_songs[:5]])}")
         # 재생이 끝났으므로 임베드 삭제
         if guild.id in current_embed_messages:
             try:
@@ -211,7 +270,9 @@ async def play_next_in_queue(guild):
                 pass
         return
 
-    video_url, video_title = await queue.get()
+    # 다음 곡 불러오기
+    video_url, video_title, added_by, is_recommended = await queue.get()
+
     try:
         player = await YTDLSource.from_url(video_url, loop=bot.loop)
     except Exception as e:
@@ -219,7 +280,7 @@ async def play_next_in_queue(guild):
         await play_next_in_queue(guild)
         return
 
-    # 다음 곡 불러오기
+    # 재생 시작
     def after_playing(error):
         if error:
             print(f"Playback error: {error}")
@@ -230,7 +291,7 @@ async def play_next_in_queue(guild):
             del current_embed_messages[guild.id]
 
         if repeat_flags.get(guild.id, False):  # 반복 재생 여부 검사
-            asyncio.run_coroutine_threadsafe(queue.put((video_url, video_title)), bot.loop)
+            asyncio.run_coroutine_threadsafe(queue.put((video_url, video_title, added_by, is_recommended)), bot.loop)
         asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
 
     # 채팅 채널 검색
@@ -238,14 +299,19 @@ async def play_next_in_queue(guild):
     if not text_channel:
         text_channel = guild.text_channels[0]
 
-    # 다음 곡 재생
+    # 음성 재생
     guild.voice_client.play(player, after=after_playing)
 
     # 임베드
     embed = discord.Embed(title="현재 재생 중", description=f"[{video_title}]\n{video_url}", color=discord.Color.red())
     duration = str(datetime.timedelta(seconds=player.data.get('duration', 0)))
     embed.add_field(name="길이", value=duration, inline=True)
-    embed.add_field(name="client", value=guild.voice_client.channel.name, inline=True)
+    embed.add_field(name="채널", value=guild.voice_client.channel.name, inline=True)
+
+    if is_recommended:
+        embed.add_field(name="요청자", value="자동재생", inline=False)
+    else:
+        embed.add_field(name="요청자", value=f"{added_by}", inline=False)
 
     # View를 사용하여 버튼 추가
     view = MusicControlView(interaction=text_channel)  # View 생성
@@ -253,6 +319,7 @@ async def play_next_in_queue(guild):
 
     # 현재 임베드 저장
     current_embed_messages[guild.id] = message
+
 
 # /stop 명령어
 @tree.command(name="stop", description="재생 중인 노래 정지")
@@ -286,11 +353,21 @@ async def skip(interaction: discord.Interaction):
 # /repeat 명령어
 @tree.command(name="repeat", description="현재 재생 중인 노래를 반복")
 async def repeat(interaction: discord.Interaction):
-    status = toggle_repeat(interaction.guild.id)
-    if status:
+    repeat_status = toggle_repeat(interaction.guild.id)
+    if repeat_status:
         await interaction.response.send_message("반복 재생 활성화", ephemeral=True)
     else:
         await interaction.response.send_message("반복 재생 비활성화", ephemeral=True)
+
+# /toggle_recommendations 명령어
+@tree.command(name="toggle_recommendations", description="대기열이 비어있을 때 자동으로 추가")
+async def toggle_recommendations(interaction: discord.Interaction):
+    recommend_status = set_recommendation_status(interaction.guild.id)
+    if recommend_status:
+        await interaction.response.send_message("자동 재생 활성화", ephemeral=True)
+    else:
+        await interaction.response.send_message("자동 재생 비활성화", ephemeral=True)
+
 
 # 음성 채널에 봇만 남은 경우 연결 끊기
 @bot.event
